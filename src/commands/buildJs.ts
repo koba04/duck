@@ -72,12 +72,21 @@ export async function buildJs(
         }
 
         logWithCount(entryConfigPath, runningJobCount++, "Compiling");
-        const outputs = await compileFn(options);
+        const [outputs, warnings] = await compileFn(options);
         const promises = outputs.map(async output => {
           await mkdir(path.dirname(output.path), { recursive: true });
           return writeFile(output.path, output.src);
         });
         await Promise.all(promises);
+        if (warnings && warnings.length > 0) {
+          warnings
+            .filter(warn => warn.key)
+            .forEach(warn => {
+              console.error(`[${warn.key}]${warn.description}`);
+              console.error(`${warn.line}:${warn.column} ${warn.source}`);
+              console.error(warn.context);
+            });
+        }
         logWithCount(entryConfigPath, completedJobCount++, "Compiled");
       } catch (e) {
         logWithCount(entryConfigPath, completedJobCount++, "Failed");

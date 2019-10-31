@@ -59,29 +59,42 @@ export interface CompilerOutput {
   source_map: string;
 }
 
+export interface WarningOoutput {
+  line: number;
+  column: number;
+  description: string;
+  key: string;
+  context: string;
+  source: string;
+}
+
 /**
  * @throws If compiler throws errors
  */
 export async function compileToJson(
   extendedOpts: ExtendedCompilerOptions
-): Promise<CompilerOutput[]> {
+): Promise<[CompilerOutput[], WarningOoutput[]]> {
   extendedOpts.compilerOptions = {
     ...extendedOpts.compilerOptions,
     json_streams: "OUT",
     error_format: "JSON",
   };
-  const outputs: CompilerOutput[] = JSON.parse(await compile(extendedOpts));
+  const { stdout, stderr } = await compile(extendedOpts);
+  const outputs: CompilerOutput[] = JSON.parse(stdout);
+  const warnings: WarningOoutput[] = stderr ? JSON.parse(stderr) : [];
   if (extendedOpts.batch) {
     // Reduce transfer size in batch mode.
     // The maximum request/response size of AWS Lambda is 6MB each.
     // See https://faastjs.org/docs/aws#queue-vs-https-mode
-    return outputs.map(({ path, src }) => ({ path, src, source_map: "" }));
+    return [outputs.map(({ path, src }) => ({ path, src, source_map: "" })), warnings];
   } else {
-    return outputs;
+    return [outputs, warnings];
   }
 }
 
-async function compile(extendedOpts: ExtendedCompilerOptions): Promise<string> {
+async function compile(
+  extendedOpts: ExtendedCompilerOptions
+): Promise<{ stdout: string; stderr?: string }> {
   let opts = extendedOpts.compilerOptions;
   if (isInAwsLambda()) {
     rewriteNodePathForAwsLambda(opts);
@@ -108,7 +121,7 @@ async function compile(extendedOpts: ExtendedCompilerOptions): Promise<string> {
       if (exitCode !== 0) {
         return reject(new CompilerError(stderr || "No stderr", exitCode));
       }
-      resolve(stdout);
+      resolve({ stdout, stderr });
     });
   });
 }
