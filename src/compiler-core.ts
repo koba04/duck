@@ -50,6 +50,7 @@ export type CompilerOptionsFormattingType =
 export interface ExtendedCompilerOptions {
   compilerOptions: CompilerOptions;
   batch?: "aws" | "local";
+  strict?: boolean;
   warningsWhitelist?: WarningsWhitelistItem[];
 }
 
@@ -59,42 +60,30 @@ export interface CompilerOutput {
   source_map: string;
 }
 
-export interface WarningOoutput {
-  line: number;
-  column: number;
-  description: string;
-  key: string;
-  context: string;
-  source: string;
-}
-
 /**
  * @throws If compiler throws errors
  */
 export async function compileToJson(
   extendedOpts: ExtendedCompilerOptions
-): Promise<[CompilerOutput[], WarningOoutput[]]> {
+): Promise<CompilerOutput[]> {
   extendedOpts.compilerOptions = {
     ...extendedOpts.compilerOptions,
     json_streams: "OUT",
     error_format: "JSON",
   };
-  const { stdout, stderr } = await compile(extendedOpts);
+  const { stdout } = await compile(extendedOpts);
   const outputs: CompilerOutput[] = JSON.parse(stdout);
-  const warnings: WarningOoutput[] = stderr ? JSON.parse(stderr) : [];
   if (extendedOpts.batch) {
     // Reduce transfer size in batch mode.
     // The maximum request/response size of AWS Lambda is 6MB each.
     // See https://faastjs.org/docs/aws#queue-vs-https-mode
-    return [outputs.map(({ path, src }) => ({ path, src, source_map: "" })), warnings];
+    return outputs.map(({ path, src }) => ({ path, src, source_map: "" }));
   } else {
-    return [outputs, warnings];
+    return outputs;
   }
 }
 
-async function compile(
-  extendedOpts: ExtendedCompilerOptions
-): Promise<{ stdout: string; stderr?: string }> {
+async function compile(extendedOpts: ExtendedCompilerOptions): Promise<{ stdout: string }> {
   let opts = extendedOpts.compilerOptions;
   if (isInAwsLambda()) {
     rewriteNodePathForAwsLambda(opts);
@@ -119,9 +108,11 @@ async function compile(
   return new Promise((resolve, reject) => {
     compiler.run((exitCode: number, stdout: string, stderr?: string) => {
       if (exitCode !== 0) {
-        return reject(new CompilerError(stderr || "No stderr", exitCode));
+        return reject(new CompilerError(stderr || "No stderr", exitCode, "error"));
+      } else if (extendedOpts.strict && stderr) {
+        return reject(new CompilerError(stderr, exitCode, "warning"));
       }
-      resolve({ stdout, stderr });
+      resolve({ stdout });
     });
   });
 }
@@ -148,12 +139,16 @@ function rewriteNodePathForAwsLambda(options: CompilerOptions): void {
   }
 }
 
+type ErrorLevel = "error" | "warning";
+
 export class CompilerError extends Error {
+  level: ErrorLevel;
   exitCode: number;
-  constructor(msg: string, exitCode: number) {
+  constructor(msg: string, exitCode: number, level: ErrorLevel) {
     super(msg);
     this.name = "CompilerError";
     this.exitCode = exitCode;
+    this.level = level;
   }
 }
 
